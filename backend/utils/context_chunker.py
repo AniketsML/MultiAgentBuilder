@@ -1,8 +1,7 @@
 """Context Chunker — Semantic windowing for large documents.
 
-For docs >4000 chars, splits by semantic coherence and maps chunks
-to agent categories so each agent gets a focused context window.
-Docs ≤4000 chars pass through raw — no chunking.
+Updated for case-based pipeline: new agent categories for KB Case Learner,
+Case Prioritiser, Case Writer, and Prompt Assembler.
 """
 
 import re
@@ -18,7 +17,7 @@ CHUNK_CATEGORIES = {
             "transfer", "move to", "proceed", "next step", "conversation flow",
             "greeting", "farewell", "opening", "closing", "sequence",
         ],
-        "agents": ["agent0", "agent3", "agent6"],
+        "agents": ["agent0", "agent2", "case_writer", "assembler"],
     },
     "persona_and_tone": {
         "keywords": [
@@ -27,7 +26,7 @@ CHUNK_CATEGORIES = {
             "character", "attitude", "manner", "approach", "behavior",
             "name is", "role is", "act as", "you are",
         ],
-        "agents": ["agent1", "agent6"],
+        "agents": ["agent1", "kb_learner"],
     },
     "guardrails_and_rules": {
         "keywords": [
@@ -36,7 +35,7 @@ CHUNK_CATEGORIES = {
             "policy", "regulation", "legal", "privacy", "sensitive", "error",
             "fallback", "fail", "invalid", "edge case", "exception",
         ],
-        "agents": ["agent1"],
+        "agents": ["agent1", "case_prioritiser"],
     },
     "data_and_variables": {
         "keywords": [
@@ -45,7 +44,16 @@ CHUNK_CATEGORIES = {
             "payment", "api", "system", "database", "record", "information",
             "capture", "store", "retrieve", "look up",
         ],
-        "agents": ["agent3", "agent5"],
+        "agents": ["agent2", "case_writer"],
+    },
+    "cases_and_edge_cases": {
+        "keywords": [
+            "if the user", "when the user", "objection", "refuses", "angry",
+            "escalat", "invalid", "incorrect", "wrong", "repeat", "retry",
+            "silent", "no response", "out of scope", "unrelated", "exit",
+            "stop", "cancel", "multiple", "ambiguous",
+        ],
+        "agents": ["kb_learner", "agent2", "case_prioritiser"],
     },
 }
 
@@ -53,34 +61,32 @@ CHUNK_CATEGORIES = {
 AGENT_CATEGORIES = {
     "agent0": ["states_and_transitions"],
     "agent1": ["persona_and_tone", "guardrails_and_rules"],
-    "agent3": ["states_and_transitions", "data_and_variables"],
-    "agent5": ["data_and_variables"],
-    "agent6": ["persona_and_tone", "states_and_transitions"],
+    "agent2": ["states_and_transitions", "data_and_variables", "cases_and_edge_cases"],
+    "kb_learner": ["persona_and_tone", "cases_and_edge_cases"],
+    "case_prioritiser": ["guardrails_and_rules", "cases_and_edge_cases"],
+    "case_writer": ["states_and_transitions", "data_and_variables"],
+    "assembler": ["states_and_transitions"],
 }
 
 CHUNK_THRESHOLD = 4000  # Docs at or below this pass through raw
 
 
 def _split_into_chunks(text: str) -> list[str]:
-    """Split document by semantic boundaries: section headings, ---, or double newlines."""
-    # Try --- separator first
+    """Split document by semantic boundaries."""
     if "---" in text:
         parts = re.split(r"\n-{3,}\n", text)
         parts = [p.strip() for p in parts if p.strip()]
         if len(parts) > 1:
             return parts
 
-    # Try markdown headings
     heading_parts = re.split(r"\n(?=#{1,3}\s)", text)
     heading_parts = [p.strip() for p in heading_parts if p.strip()]
     if len(heading_parts) > 1:
         return heading_parts
 
-    # Fall back to double newlines
     parts = re.split(r"\n\n+", text)
     parts = [p.strip() for p in parts if p.strip()]
 
-    # If we got too many tiny chunks, merge adjacent ones to get ~500-800 char chunks
     if len(parts) > 10:
         merged = []
         current = ""
@@ -107,37 +113,28 @@ def _categorize_chunk(chunk: str) -> str:
         score = sum(1 for kw in config["keywords"] if kw in chunk_lower)
         scores[category] = score
 
-    # Return the highest-scoring category, default to states_and_transitions
     best = max(scores, key=scores.get)
     return best if scores[best] > 0 else "states_and_transitions"
 
 
 def chunk_for_agent(text: str, agent_id: str, max_chars: int = 3000) -> str:
-    """Return the relevant portion of a document for a specific agent.
-
-    - Docs ≤4000 chars → returns full text (no chunking)
-    - Larger docs → chunks semantically, filters by agent's category needs,
-      returns concatenated relevant chunks up to max_chars
-    """
+    """Return the relevant portion of a document for a specific agent."""
     if len(text) <= CHUNK_THRESHOLD:
         return text
 
     chunks = _split_into_chunks(text)
     needed_categories = AGENT_CATEGORIES.get(agent_id, ["states_and_transitions"])
 
-    # Score and filter chunks
     relevant_chunks = []
     for chunk in chunks:
         category = _categorize_chunk(chunk)
         if category in needed_categories:
             relevant_chunks.append((chunk, category))
 
-    # If no relevant chunks found, return first N chunks as fallback
     if not relevant_chunks:
         fallback = "\n\n".join(chunks[:3])
         return fallback[:max_chars]
 
-    # Concatenate relevant chunks up to max_chars
     result = ""
     for chunk, _ in relevant_chunks:
         if len(result) + len(chunk) + 2 > max_chars:
@@ -148,7 +145,7 @@ def chunk_for_agent(text: str, agent_id: str, max_chars: int = 3000) -> str:
         result = relevant_chunks[0][0][:max_chars]
 
     logger.info(
-        f"[Chunker] {agent_id}: {len(text)} chars → {len(result)} chars "
+        f"[Chunker] {agent_id}: {len(text)} chars -> {len(result)} chars "
         f"({len(relevant_chunks)}/{len(chunks)} chunks relevant)"
     )
     return result

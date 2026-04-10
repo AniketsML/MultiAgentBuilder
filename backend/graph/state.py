@@ -1,4 +1,4 @@
-"""Initial state factory for the LangGraph pipeline."""
+"""Initial state factory for the LangGraph pipeline — case-based + DNA version."""
 
 from backend.models.schemas import PipelineState
 
@@ -17,8 +17,15 @@ def make_initial_state(
         past_prompts=past_prompts,
         state_names=state_names,
         context_schema=None,
+        # Case-based pipeline fields
+        case_learning_contexts=[],
+        state_decompositions=[],
+        prioritised_cases=[],
+        case_handlers=[],
         extracted_variables=None,
-        pattern_analysis=None,
+        # Prompt DNA
+        mixed_dna=None,
+        # Output fields
         state_specs=[],
         current_state_index=0,
         drafts=[],
@@ -33,3 +40,4 @@ def make_initial_state(
         regen_state_name=None,
         regen_reason=None,
     )
+

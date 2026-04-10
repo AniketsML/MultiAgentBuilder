@@ -1,4 +1,14 @@
-"""Pydantic models and LangGraph state definition for the multi-agent pipeline."""
+"""Pydantic models and LangGraph state definition for the multi-agent pipeline.
+
+Redesigned for case-based prompt generation with Prompt DNA:
+- Multi-Paradigm Analyzer extracts 8 paradigms of DNA at ingestion time
+- Paradigm Mixer selects + blends best DNA per paradigm across KB
+- KB Case Learner extracts structured case knowledge from KB
+- State Decomposer breaks states into exhaustive case maps
+- Case Prioritiser ranks cases by probability x criticality
+- Case Writer writes per-case handlers with MixedDNA constraints
+- Prompt Assembler composes final prompts with paradigm coherence
+"""
 
 from __future__ import annotations
 from typing import Literal, TypedDict
@@ -18,7 +28,7 @@ class ContextSchema(BaseModel):
     # How to write prompts (learned from sample prompts)
     format_rules: list[str]                  # concrete formatting instructions discovered from examples
     style_patterns: list[str]                # structural patterns: how the user opens, frames, constrains
-    raw_examples: list[str]                  # verbatim sample prompts — the gold standard reference
+    raw_examples: list[str]                  # verbatim sample prompts -- the gold standard reference
 
     # Behavioral rules that EVERY state prompt must respect
     guardrails: list[str] = []               # things the bot must NEVER do
@@ -33,8 +43,9 @@ class ContextSchema(BaseModel):
     # Flow-level rules
     transition_rules: list[str] = []         # rules about how states connect and flow
 
+
 # ─────────────────────────────────────────────
-# Variable Extractor output
+# Variable Schema (now extracted by Agent 2)
 # ─────────────────────────────────────────────
 class VariableSchema(BaseModel):
     name: str
@@ -54,19 +65,111 @@ class RetrievalContext(BaseModel):
 
 
 # ─────────────────────────────────────────────
-# Pattern Abstractor output (Agent 6)
+# KB Case Learning output (replaces PatternAnalysis)
 # ─────────────────────────────────────────────
-class PatternAnalysis(BaseModel):
-    template_skeleton: str = ""
-    core_rules: list[str] = []
-    anti_patterns: list[str] = []
-    slot_priority: list[str] = []
+class CaseKnowledge(BaseModel):
+    """One case-handling strategy extracted from a KB prompt."""
+    case_category: str                       # e.g. "user_refuses", "wrong_format"
+    handling_strategy: str                   # how the KB prompt handles this case
+    variables_used: list[str] = []           # variables referenced in this case
+    transition_target: str = ""              # where it transitions after this case
+    tone_approach: str = ""                  # tone used for this case type
+
+
+class CaseLearningContext(BaseModel):
+    """Per-state output from KB Case Learner -- parsed knowledge from KB prompts."""
+    state_name: str
+    source_count: int = 0                    # how many KB prompts were analysed
+    learned_cases: list[CaseKnowledge] = []  # structured case knowledge
+    common_variables: list[str] = []         # variables seen across multiple KB prompts
+    anti_patterns: list[str] = []            # what KB prompts avoid
+    retrieval_note: str = ""
+    is_cold_start: bool = False
 
 
 # ─────────────────────────────────────────────
-# Per-dimension critic scoring
+# State Decomposer output (upgraded Agent 2)
+# ─────────────────────────────────────────────
+class CaseSpec(BaseModel):
+    """One case within a state decomposition."""
+    case_name: str                           # e.g. "happy_path", "user_refuses"
+    category: str                            # canonical category from taxonomy
+    description: str                         # what triggers this case
+    handling_hint: str                       # suggested handling strategy
+    required_variables: list[str] = []       # variables needed for this case
+    transition_to: str = ""                  # next state after this case
+    tone_guidance: str = ""                  # tone appropriate for this case type
+
+
+class StateDecomposition(BaseModel):
+    """Full decomposition of one state into cases + variables."""
+    state_name: str
+    intent: str                              # one sentence: what this state achieves
+    cases: list[CaseSpec]                    # exhaustive case map
+    extracted_variables: list[VariableSchema] = []  # variables emerging from cases
+    dependencies: list[str] = []             # other states that must occur first
+    tags: list[str] = []
+
+
+# ─────────────────────────────────────────────
+# Case Prioritiser output
+# ─────────────────────────────────────────────
+class PrioritisedCase(BaseModel):
+    """A case with priority scores."""
+    case_name: str
+    category: str
+    description: str
+    handling_hint: str
+    required_variables: list[str] = []
+    transition_to: str = ""
+    tone_guidance: str = ""
+    occurrence_probability: int = 50         # 0-100: how often will this happen
+    criticality: int = 50                    # 0-100: cost of handling this badly
+    priority_score: int = 50                 # combined score
+    action: Literal["keep", "merge", "filter"] = "keep"
+    merge_into: str = ""                     # if action=merge, which case absorbs it
+
+
+class PrioritisedCaseList(BaseModel):
+    """Prioritised and filtered case list for one state."""
+    state_name: str
+    intent: str
+    cases: list[PrioritisedCase]             # ordered by priority_score desc
+    filtered_count: int = 0                  # how many cases were removed
+    merged_count: int = 0                    # how many cases were merged
+    total_char_budget: int = 4500            # char limit for assembled prompt
+    extracted_variables: list[VariableSchema] = []
+    dependencies: list[str] = []
+    tags: list[str] = []
+
+
+# ─────────────────────────────────────────────
+# Case Writer output
+# ─────────────────────────────────────────────
+class CaseHandler(BaseModel):
+    """A self-contained handling block for one case."""
+    case_name: str
+    category: str
+    condition: str                           # what triggers this handler
+    bot_response: str                        # what the bot says/does
+    variables_used: list[str] = []
+    transition_to: str = ""
+    tone: str = ""                           # tone used in this handler
+    char_count: int = 0                      # character count of this handler
+
+
+class CaseWriterOutput(BaseModel):
+    """All case handlers for one state."""
+    state_name: str
+    handlers: list[CaseHandler]
+    total_char_count: int = 0
+
+
+# ─────────────────────────────────────────────
+# Per-dimension critic scoring (updated dimensions)
 # ─────────────────────────────────────────────
 class DimensionScore(BaseModel):
+    """Scores vary by gate -- not all dimensions apply to every gate."""
     persona_consistency: int = 0
     edge_case_coverage: int = 0
     tone_alignment: int = 0
@@ -76,16 +179,18 @@ class DimensionScore(BaseModel):
 
 class CriticScorecard(BaseModel):
     stage: str = ""
+    gate_type: str = ""                      # which specialized rubric was used
     dimensions: DimensionScore = DimensionScore()
     total: int = 0
     passed: bool = True
     failed_dimensions: list[str] = []
     targeted_instructions: dict[str, str] = {}
-
+    root_cause_agent: str = ""               # if failure caused by upstream agent
+    per_case_scores: dict[str, int] = {}     # per-case-handler quality (after case_writer)
 
 
 # ─────────────────────────────────────────────
-# Agent 2 output (one per state)
+# Legacy StateSpec (kept for backward compatibility in serialization)
 # ─────────────────────────────────────────────
 class StateSpec(BaseModel):
     state_name: str
@@ -97,7 +202,7 @@ class StateSpec(BaseModel):
 
 
 # ─────────────────────────────────────────────
-# KB record (ChromaDB + SQLite)
+# KB record (ChromaDB + SQLite) -- now with case metadata
 # ─────────────────────────────────────────────
 class KBRecord(BaseModel):
     id: str
@@ -106,10 +211,15 @@ class KBRecord(BaseModel):
     context_domain: str
     state_intent: str
     tags: list[str]
-    source: Literal["seed", "generated", "edited"]
+    source: Literal["seed", "generated", "edited", "approved"]
     approved_by: str
     timestamp: str
     run_id: str
+    # New: structured case metadata
+    cases_handled: list[str] = []            # case categories handled in this prompt
+    case_handling_map: dict[str, str] = {}   # case_category -> handling strategy summary
+    variables_used: list[str] = []           # variables referenced in prompt
+    transitions: dict[str, str] = {}         # case_category -> next state name
 
 
 # ─────────────────────────────────────────────
@@ -119,6 +229,7 @@ class PromptDraft(BaseModel):
     state_name: str
     prompt: str
     retrieved_examples: list[str] = []
+    case_breakdown: list[str] = []           # case names handled in this prompt
     status: Literal["pending", "approved", "edited", "discarded"] = "pending"
     edit_content: str | None = None
     discard_reason: str | None = None
@@ -139,10 +250,101 @@ class ReviewResult(BaseModel):
 class RunResult(BaseModel):
     run_id: str
     context: ContextSchema
-    states: list[StateSpec]
+    states: list[StateDecomposition]
     variables: list[VariableSchema] | None = None
     drafts: list[PromptDraft]
     review_notes: str
+    case_learning_contexts: list[dict] = []  # per-state CaseLearningContext
+    prioritised_cases: list[dict] = []       # per-state PrioritisedCaseList
+    case_handlers: list[dict] = []           # per-state CaseWriterOutput
+    mixed_dna: dict | None = None            # serialised MixedDNA
+
+
+# ─────────────────────────────────────────────
+# Prompt DNA — 8 paradigm extraction system
+# ─────────────────────────────────────────────
+PARADIGM_NAMES = [
+    "structural", "linguistic", "behavioral", "persona",
+    "transition", "constraint", "recovery", "rhythm",
+]
+
+
+class ParadigmPrinciples(BaseModel):
+    """Extracted principles for one paradigm from one source prompt."""
+    paradigm: str                            # one of PARADIGM_NAMES
+    principles: list[str] = []               # domain-neutral abstract principles
+    confidence: float = 0.0                  # 0.0-1.0: analyzer self-assessed certainty
+
+
+class PromptDNA(BaseModel):
+    """Complete DNA extraction from one KB prompt — all 8 paradigms."""
+    source_prompt_id: str                    # KBRecord.id
+    domain: str
+    use_case: str = ""                       # e.g. "policy_renewal_outbound"
+    structural_dna: ParadigmPrinciples = ParadigmPrinciples(paradigm="structural")
+    linguistic_dna: ParadigmPrinciples = ParadigmPrinciples(paradigm="linguistic")
+    behavioral_dna: ParadigmPrinciples = ParadigmPrinciples(paradigm="behavioral")
+    persona_dna: ParadigmPrinciples = ParadigmPrinciples(paradigm="persona")
+    transition_dna: ParadigmPrinciples = ParadigmPrinciples(paradigm="transition")
+    constraint_dna: ParadigmPrinciples = ParadigmPrinciples(paradigm="constraint")
+    recovery_dna: ParadigmPrinciples = ParadigmPrinciples(paradigm="recovery")
+    rhythm_dna: ParadigmPrinciples = ParadigmPrinciples(paradigm="rhythm")
+    timestamp: str = ""
+
+    def get_paradigm(self, name: str) -> ParadigmPrinciples:
+        return getattr(self, f"{name}_dna", ParadigmPrinciples(paradigm=name))
+
+    def all_paradigms(self) -> list[ParadigmPrinciples]:
+        return [self.get_paradigm(p) for p in PARADIGM_NAMES]
+
+
+class ParadigmConflict(BaseModel):
+    """A conflict between two selected paradigm sources."""
+    paradigm_a: str                          # e.g. "structural"
+    paradigm_b: str                          # e.g. "rhythm"
+    conflict_description: str                # what conflicts
+    resolution: str                          # how it was resolved
+    priority_winner: str                     # which paradigm took priority
+
+
+class MixedDNA(BaseModel):
+    """Blended DNA from multiple sources — one best-of per paradigm."""
+    structural: ParadigmPrinciples = ParadigmPrinciples(paradigm="structural")
+    linguistic: ParadigmPrinciples = ParadigmPrinciples(paradigm="linguistic")
+    behavioral: ParadigmPrinciples = ParadigmPrinciples(paradigm="behavioral")
+    persona: ParadigmPrinciples = ParadigmPrinciples(paradigm="persona")
+    transition: ParadigmPrinciples = ParadigmPrinciples(paradigm="transition")
+    constraint: ParadigmPrinciples = ParadigmPrinciples(paradigm="constraint")
+    recovery: ParadigmPrinciples = ParadigmPrinciples(paradigm="recovery")
+    rhythm: ParadigmPrinciples = ParadigmPrinciples(paradigm="rhythm")
+    source_map: dict[str, str] = {}          # paradigm -> source_prompt_id
+    conflicts: list[ParadigmConflict] = []   # detected and resolved conflicts
+    is_cold_start: bool = False              # no DNA available
+
+    def get_paradigm(self, name: str) -> ParadigmPrinciples:
+        return getattr(self, name, ParadigmPrinciples(paradigm=name))
+
+    def all_principles_flat(self) -> list[str]:
+        """All principles across all paradigms as a flat list."""
+        result = []
+        for p in PARADIGM_NAMES:
+            pp = self.get_paradigm(p)
+            for pr in pp.principles:
+                result.append(f"[{p.upper()}] {pr}")
+        return result
+
+
+# ─────────────────────────────────────────────
+# Agent prompt versioning (for improver regression detection)
+# ─────────────────────────────────────────────
+class PromptVersion(BaseModel):
+    """One version of an agent's system prompt."""
+    version: int
+    prompt: str
+    timestamp: str
+    trigger_feedback: str = ""               # what feedback triggered this rewrite
+    scores_before: dict[str, int] = {}       # review scores before this version
+    scores_after: dict[str, int] = {}        # review scores after this version ran
 
 
 # ─────────────────────────────────────────────
@@ -151,24 +353,36 @@ class RunResult(BaseModel):
 class PipelineState(TypedDict, total=False):
     run_id: str
     context_doc: str
-    raw_text: str                         # original context doc text for Agent 2/5
+    raw_text: str                            # original context doc text
     past_prompts: str | None
     state_names: list[str]
-    context_schema: dict | None           # serialised ContextSchema
-    extracted_variables: list[dict] | None# serialised list[VariableSchema]
-    pattern_analysis: dict | None         # serialised PatternAnalysis
-    state_specs: list[dict]               # serialised list[StateSpec]
+    context_schema: dict | None              # serialised ContextSchema
+
+    # Case-based pipeline fields
+    case_learning_contexts: list[dict]       # per-state CaseLearningContext
+    state_decompositions: list[dict]         # per-state StateDecomposition
+    prioritised_cases: list[dict]            # per-state PrioritisedCaseList
+    case_handlers: list[dict]               # per-state CaseWriterOutput
+    extracted_variables: list[dict] | None   # aggregated from all decompositions
+
+    # Prompt DNA fields
+    mixed_dna: dict | None                   # serialised MixedDNA
+
+    # Legacy fields retained for compatibility
+    state_specs: list[dict]                  # kept for Agent 4 / finalise
     current_state_index: int
-    drafts: list[dict]                    # serialised list[PromptDraft]
-    retrieval_contexts: list[dict]        # per-draft RetrievalContext
+    drafts: list[dict]                       # serialised list[PromptDraft]
+    retrieval_contexts: list[dict]           # per-draft RetrievalContext
     review_notes: str | None
     review_findings: list[dict]
-    critic_scorecards: list[dict]         # per-stage CriticScorecard
+    critic_scorecards: list[dict]            # per-stage CriticScorecard
     progress: str
     error: str | None
+
     # Cold start tracking
     is_cold_start: bool
     cold_start_domains: list[str]
+
     # Regeneration fields
     regen_state_name: str | None
     regen_reason: str | None
@@ -218,3 +432,17 @@ class ManualKBEntry(BaseModel):
 
 class AutoKBRequest(BaseModel):
     prompt: str
+
+
+class MasterFeedbackRequest(BaseModel):
+    """Route qualitative feedback from Master Agent chat to improvers."""
+    feedback: str
+    affected_agents: list[str] = []          # e.g. ["case_writer", "assembler"]
+
+
+class MasterActionRequest(BaseModel):
+    """Master Agent write actions."""
+    action: Literal["approve", "discard", "add_kb", "trigger_improvement", "override_priority"]
+    run_id: str = ""
+    state_name: str = ""
+    payload: dict = {}

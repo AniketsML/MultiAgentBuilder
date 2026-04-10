@@ -1,4 +1,8 @@
-"""API routes for approval: POST /approve and POST /discard."""
+"""API routes for approval: POST /approve and POST /discard.
+
+Updated for case-based pipeline: passes case metadata to KB writer,
+regeneration re-runs from Prompt Assembler with user feedback.
+"""
 
 import json
 from fastapi import APIRouter, HTTPException
@@ -16,7 +20,7 @@ router = APIRouter()
 
 @router.post("/approve")
 async def approve_draft(request: ApproveRequest):
-    """Approve a single draft prompt (as-is or with edits). Writes to KB."""
+    """Approve a single draft prompt (as-is or with edits). Writes to KB with case metadata."""
     run_data = await sqlite_db.get_run(request.run_id)
     if not run_data:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -26,7 +30,6 @@ async def approve_draft(request: ApproveRequest):
 
     result = json.loads(run_data["result_json"])
     context = ContextSchema(**result["context"])
-    state_specs = [s for s in result["states"]]
 
     # Find the matching draft
     target_draft = None
@@ -50,11 +53,13 @@ async def approve_draft(request: ApproveRequest):
     else:
         draft.status = "approved"
 
-    # Write to KB
+    # Write to KB with case metadata
     kb_id = await write_approved(
         draft=draft,
         context=context,
-        state_specs=state_specs,
+        state_decompositions=result.get("states", []),
+        prioritised_cases=result.get("prioritised_cases", []),
+        case_handlers=result.get("case_handlers", []),
         run_id=request.run_id,
         was_edited=was_edited,
     )
@@ -74,7 +79,7 @@ async def approve_draft(request: ApproveRequest):
 
 @router.post("/discard")
 async def discard_draft(request: DiscardRequest):
-    """Discard a draft and optionally regenerate."""
+    """Discard a draft and optionally regenerate from Prompt Assembler."""
     run_data = await sqlite_db.get_run(request.run_id)
     if not run_data:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -94,7 +99,7 @@ async def discard_draft(request: DiscardRequest):
     new_draft = None
 
     if request.regenerate:
-        # Build a minimal state for regeneration
+        # Build state for regeneration — re-runs from Prompt Assembler with feedback
         regen_state: PipelineState = {
             "run_id": request.run_id,
             "context_doc": "",
@@ -102,9 +107,14 @@ async def discard_draft(request: DiscardRequest):
             "past_prompts": None,
             "state_names": [],
             "context_schema": result["context"],
+            # Case-based fields
+            "case_learning_contexts": result.get("case_learning_contexts", []),
+            "state_decompositions": result.get("states", []),
+            "prioritised_cases": result.get("prioritised_cases", []),
+            "case_handlers": result.get("case_handlers", []),
             "extracted_variables": result.get("variables", []),
-            "pattern_analysis": result.get("pattern_analysis"),
-            "state_specs": result["states"],
+            # Legacy
+            "state_specs": [],
             "current_state_index": 0,
             "drafts": result["drafts"],
             "retrieval_contexts": [],
