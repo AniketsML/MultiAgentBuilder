@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { CheckCircle, Copy, Download, RotateCw } from './Icons'
+import RenderPrompt from './RenderPrompt'
 
 export default function OutputSummary({ result, onNewRun }) {
   const [copiedState, setCopiedState] = useState(null)
@@ -78,8 +79,8 @@ export default function OutputSummary({ result, onNewRun }) {
                   <Copy size={12} /> {copiedState === d.state_name ? 'Copied' : 'Copy'}
                 </button>
               </div>
-              <div className="p-5">
-                <div className="mono-box">{getPromptText(d)}</div>
+              <div className="p-5 bg-[var(--color-bg)] rounded-bl-lg rounded-br-lg">
+                <RenderPrompt text={getPromptText(d)} />
               </div>
             </div>
           ))}

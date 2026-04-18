@@ -12,11 +12,13 @@ structured prompt. Non-trivial responsibilities:
 import json
 import re
 import logging
+import asyncio
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from backend.agents.claude_client import get_llm
 from backend.utils.prompt_loader import load_prompt
 from backend.models.schemas import PipelineState, PromptDraft
+from backend.kb import sqlite_db
 
 logger = logging.getLogger(__name__)
 
@@ -177,8 +179,16 @@ async def assemble_prompts(state: PipelineState) -> dict:
     drafts = []
     retrieval_contexts = []
 
-    for ch_output in case_handlers:
+    completed_count = 0
+    total = len(case_handlers)
+
+    async def _process(ch_output):
+        nonlocal completed_count
         state_name = ch_output.get("state_name", "")
+        await sqlite_db.update_run_progress(
+            state["run_id"],
+            f"Prompt Assembly: processing {state_name}..."
+        )
         handlers = ch_output.get("handlers", [])
         pcl = pcl_by_state.get(state_name, {})
         intent = pcl.get("intent", "")
@@ -203,14 +213,28 @@ async def assemble_prompts(state: PipelineState) -> dict:
         # Track which cases were included
         case_names = [h.get("case_name", "") for h in handlers]
 
-        drafts.append(
-            PromptDraft(
-                state_name=state_name,
-                prompt=prompt_text,
-                case_breakdown=case_names,
-                retrieved_examples=[],
-            ).model_dump()
+        draft = PromptDraft(
+            state_name=state_name,
+            prompt=prompt_text,
+            case_breakdown=case_names,
+            retrieved_examples=[],
         )
+        
+        completed_count += 1
+        await sqlite_db.update_run_progress(
+            state["run_id"],
+            f"Prompt Assembly {completed_count}/{total}: finished {state_name}"
+        )
+        return draft
+
+    tasks = [_process(ch) for ch in case_handlers]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for res in results:
+        if isinstance(res, Exception):
+            logger.error(f"[Assembler] Error in async assembly: {res}")
+            continue
+        drafts.append(res.model_dump())
 
     logger.info(f"Prompt Assembler: {len(drafts)} prompts assembled")
 

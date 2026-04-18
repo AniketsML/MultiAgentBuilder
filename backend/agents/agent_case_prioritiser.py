@@ -11,6 +11,7 @@ Low-criticality low-frequency cases get consolidated into catch-all.
 
 import json
 import logging
+import asyncio
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from backend.agents.claude_client import get_llm
@@ -19,6 +20,7 @@ from backend.utils.prompt_loader import load_prompt
 from backend.models.schemas import (
     PipelineState, PrioritisedCase, PrioritisedCaseList, VariableSchema,
 )
+from backend.kb import sqlite_db
 
 logger = logging.getLogger(__name__)
 
@@ -137,8 +139,16 @@ async def prioritise_cases(state: PipelineState) -> dict:
 
     prioritised_lists = []
 
-    for decomposition in decompositions:
+    completed_count = 0
+    total = len(decompositions)
+
+    async def _process(decomposition):
+        nonlocal completed_count
         state_name = decomposition.get("state_name", "")
+        await sqlite_db.update_run_progress(
+            state["run_id"],
+            f"Prioritising Cases: processing {state_name}..."
+        )
 
         # Determine char limit
         char_limit = 2000 if state_name in ("global_instructions", "global_instruction") else 4500
@@ -175,7 +185,22 @@ async def prioritise_cases(state: PipelineState) -> dict:
             dependencies=decomposition.get("dependencies", []),
             tags=decomposition.get("tags", []),
         )
-        prioritised_lists.append(pcl.model_dump())
+        
+        completed_count += 1
+        await sqlite_db.update_run_progress(
+            state["run_id"],
+            f"Prioritising Cases {completed_count}/{total}: finished {state_name}"
+        )
+        return pcl
+
+    tasks = [_process(d) for d in decompositions]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for res in results:
+        if isinstance(res, Exception):
+            logger.error(f"[Prioritiser] Error in async prioritisation: {res}")
+            continue
+        prioritised_lists.append(res.model_dump())
 
     kept_total = sum(
         sum(1 for c in pcl["cases"] if c["action"] == "keep")

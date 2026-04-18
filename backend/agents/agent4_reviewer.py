@@ -134,6 +134,6 @@ async def review_consistency(state: PipelineState) -> dict:
 
     return {
         "review_notes": review.overall_note,
-        "review_findings": [f.model_dump() for f in review.findings],
+        "review_findings": [f if isinstance(f, dict) else f.model_dump() for f in review.findings],
         "progress": "Consistency review complete",
     }

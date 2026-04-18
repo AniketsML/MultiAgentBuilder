@@ -1,0 +1,52 @@
+====== STARTING FAST HEADLESS PIPELINE RUN ======
+Node 'analyse_context' passed.
+   -> Progress string: Context analysed
+Node 'gate_after_analyse' passed.
+   -> Progress string: Reviewed context_analysis: 90/100
+Node 'kb_case_learner' passed.
+   -> Progress string: KB Case Learning complete (3 states analysed)
+Node 'gate_after_kb_learning' passed.
+   -> Progress string: Reviewed kb_case_learning: 100/100
+Node 'paradigm_mixer' passed.
+   -> Progress string: Paradigm mixing: cold start (no DNA in KB)
+python : [ReviewGate] Improver improver_paradigm_mixer failed (non-fatal): cannot import name 
+'execute_base_improvement' from 'backend.agents.improver_base' 
+(C:\Users\Admin\Desktop\MultiAgentBuilder-main\MultiAgentBuilder-main\backend\agents\improver_base.py)
+At line:1 char:1
++ python -u test_pipeline_sanity.py > test_out.txt 2>&1
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([ReviewGate] Im...prover_base.py):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Node 'gate_after_paradigm_mixer' passed.
+   -> Progress string: Reviewed paradigm_mixing: 0/100
+Node 'decompose_states' passed.
+   -> Progress string: States decomposed (3 states, 28 total cases)
+Node 'gate_after_decompose' passed.
+   -> Progress string: Reviewed state_decomposition: 82/100
+Node 'prioritise_cases' passed.
+   -> Progress string: Cases prioritised (21 kept across 3 states)
+Node 'gate_after_prioritise' passed.
+   -> Progress string: Reviewed case_prioritisation: 86/100
+Node 'seed_kb' passed.
+   -> Progress string: KB seeded
+[CaseWriter] Error in async case writer: _build_user_prompt() got an unexpected keyword argument 'dna_principles'. Did 
+you mean 'mixed_dna_principles'?
+[CaseWriter] Error in async case writer: _build_user_prompt() got an unexpected keyword argument 'dna_principles'. Did 
+you mean 'mixed_dna_principles'?
+[CaseWriter] Error in async case writer: _build_user_prompt() got an unexpected keyword argument 'dna_principles'. Did 
+you mean 'mixed_dna_principles'?
+Node 'write_case_handlers' passed.
+   -> Progress string: Case handlers written (0 handlers across 0 states)
+Node 'gate_after_case_write' passed.
+   -> Progress string: Review gate skipped for case_writing (no output)
+Node 'assemble_prompts' passed.
+   -> Progress string: Assembly skipped (no case handlers)
+Node 'gate_after_assembly' passed.
+   -> Progress string: Review gate skipped for prompt_assembly (no output)
+Node 'review_consistency' passed.
+   -> Progress string: Consistency review complete
+Node 'finalise' passed.
+   -> Progress string: Pipeline complete
+
+====== PIPELINE SUCCESS ======

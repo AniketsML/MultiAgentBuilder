@@ -16,6 +16,7 @@ and paradigm compliance.
 
 import json
 import logging
+import asyncio
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from backend.agents.claude_client import get_llm
@@ -24,6 +25,7 @@ from backend.utils.prompt_loader import load_prompt
 from backend.models.schemas import (
     PipelineState, CaseHandler, CaseWriterOutput,
 )
+from backend.kb import sqlite_db
 
 logger = logging.getLogger(__name__)
 
@@ -187,12 +189,26 @@ async def write_case_handlers(state: PipelineState) -> dict:
 
     all_handlers = []
 
-    for pcl in prioritised_cases:
+    completed_count = 0
+    total = len(prioritised_cases)
+
+    async def _process(pcl):
+        nonlocal completed_count
         state_name = pcl.get("state_name", "")
+        intent = pcl.get("intent", "")
+        char_limit = pcl.get("total_char_budget", 4500)
+        
+        await sqlite_db.update_run_progress(
+            state["run_id"],
+            f"Case Handlers: processing {state_name}..."
+        )
         case_learning = cl_by_state.get(state_name)
 
         user_prompt = _build_user_prompt(
-            context_json, pcl, case_learning, variables_json,
+            context_schema_json=context_json,
+            prioritised_case_list=pcl,
+            case_learning=case_learning,
+            variables_json=variables_json,
             mixed_dna_principles=dna_principles,
         )
 
@@ -205,19 +221,34 @@ async def write_case_handlers(state: PipelineState) -> dict:
         if isinstance(parsed, list):
             parsed = {"handlers": parsed}
 
+        # Coerce handlers
         handlers = []
         for h in parsed.get("handlers", []):
-            h = _coerce_handler(h)
-            handlers.append(CaseHandler(**h))
+            handlers.append(_coerce_handler(h))
 
-        total_chars = sum(h.char_count for h in handlers)
+        total_chars = sum(h["char_count"] for h in handlers)
 
         output = CaseWriterOutput(
             state_name=state_name,
             handlers=handlers,
             total_char_count=total_chars,
         )
-        all_handlers.append(output.model_dump())
+        
+        completed_count += 1
+        await sqlite_db.update_run_progress(
+            state["run_id"],
+            f"Case Handlers {completed_count}/{total}: finished {state_name}"
+        )
+        return output
+
+    tasks = [_process(pcl) for pcl in prioritised_cases]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for res in results:
+        if isinstance(res, Exception):
+            logger.error(f"[CaseWriter] Error in async case writer: {res}")
+            continue
+        all_handlers.append(res.model_dump())
 
     total_handlers = sum(len(h["handlers"]) for h in all_handlers)
 

@@ -279,7 +279,7 @@ class ReviewFinding(BaseModel):
 
 
 class ReviewResult(BaseModel):
-    findings: list[Any] = []
+    findings: list[ReviewFinding] = []
     overall_note: Any = ""
 
 

@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react'
 import StateList from './StateList'
 import { startRun, streamRunProgress, uploadDocument, extractStates } from '../api'
+import PipelineVisualizer from './PipelineVisualizer'
 import { FileText, Upload, Brain, Sparkles, Rocket, ChevronDown, FolderOpen, Edit, AlertTriangle, Layers, GitBranch } from './Icons'
 
 const STEPS = { UPLOAD: 'upload', STATES: 'states', RUN: 'run' }
@@ -288,7 +289,7 @@ export default function ContextInput({ onRunComplete }) {
 
       {/* ──── Running ──── */}
       {step === STEPS.RUN && (
-        <div className="card p-6">
+        <div className="card p-8 min-h-[220px] flex flex-col justify-center">
           {error ? (
             <div className="flex items-start gap-2.5 p-3 rounded-lg bg-[var(--color-danger-muted)] border border-[var(--color-danger)]/20">
               <AlertTriangle size={15} className="text-[var(--color-danger)] mt-0.5" />
@@ -299,19 +300,8 @@ export default function ContextInput({ onRunComplete }) {
                 </button>
               </div>
             </div>
-          ) : running && (
-            <div className="text-center py-4">
-              <div className="flex items-center justify-center gap-2 mb-3">
-                <div className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] pulse-soft" />
-                <span className="text-sm text-[var(--color-text-2)] font-medium">{progress}</span>
-              </div>
-              <div className="progress-track max-w-xs mx-auto">
-                <div className="progress-fill" style={{ width: '60%' }} />
-              </div>
-              <p className="text-[11px] text-[var(--color-text-3)] mt-3">
-                Processing {stateNames.length} states through 4 agents
-              </p>
-            </div>
+          ) : (running || progress) && (
+            <PipelineVisualizer progress={progress} />
           )}
         </div>
       )}

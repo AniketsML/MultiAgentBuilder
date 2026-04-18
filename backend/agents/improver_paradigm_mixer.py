@@ -1,5 +1,5 @@
 """Improver for the Paradigm Mixer agent."""
-from backend.agents.improver_base import execute_base_improvement
+from backend.agents.improver_base import execute_improvement as _base_improve
 
 async def execute_improvement(feedback: str, **kwargs):
-    await execute_base_improvement("paradigm_mixer", feedback, **kwargs)
+    await _base_improve("paradigm_mixer", feedback, **kwargs)

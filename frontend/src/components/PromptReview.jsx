@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { approveDraft, discardDraft } from '../api'
-import { Check, Edit, X, AlertTriangle, Eye, ChevronDown, RotateCw } from './Icons'
+import { Check, Edit, X, AlertTriangle, Eye, ChevronDown, RotateCw, Copy } from './Icons'
+import RenderPrompt from './RenderPrompt'
 
 export default function PromptReview({ runId, result, onComplete }) {
   const [drafts, setDrafts] = useState(result.drafts || [])
@@ -11,6 +12,13 @@ export default function PromptReview({ runId, result, onComplete }) {
   const [regenToggle, setRegenToggle] = useState(true)
   const [loading, setLoading] = useState(null)
   const [expandedExamples, setExpandedExamples] = useState({})
+  const [copiedState, setCopiedState] = useState(null)
+
+  const copyToClipboard = async (text, name) => {
+    await navigator.clipboard.writeText(text)
+    setCopiedState(name)
+    setTimeout(() => setCopiedState(null), 2000)
+  }
 
   const reviewed = drafts.filter(d => d.status !== 'pending').length
   const total = drafts.length
@@ -100,7 +108,12 @@ export default function PromptReview({ runId, result, onComplete }) {
                   {spec && <p className="text-[10px] text-[var(--color-text-3)] mt-0.5">{spec.intent}</p>}
                 </div>
               </div>
-              <span className={`badge ${cls}`}>{label}</span>
+              <div className="flex items-center gap-2">
+                <span className={`badge ${cls}`}>{label}</span>
+                <button onClick={() => copyToClipboard(draft.edit_content || draft.prompt, draft.state_name)} className="btn btn-ghost text-[10px] py-1 px-2 ml-1">
+                  <Copy size={12} /> {copiedState === draft.state_name ? 'Copied' : 'Copy'}
+                </button>
+              </div>
             </div>
 
             {/* Content */}
@@ -117,7 +130,9 @@ export default function PromptReview({ runId, result, onComplete }) {
                   </div>
                 </div>
               ) : (
-                <div className="mono-box">{draft.edit_content || draft.prompt}</div>
+                <div className="p-4 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-xl">
+                  <RenderPrompt text={draft.edit_content || draft.prompt} />
+                </div>
               )}
 
               {/* Discard dialog */}

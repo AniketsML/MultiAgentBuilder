@@ -221,8 +221,12 @@ async def learn_cases(state: PipelineState) -> dict:
     case_learning_contexts = []
     any_cold_start = False
 
-    for state_name in state_names:
-        # Use a basic intent derived from the state name
+    import asyncio
+    completed = 0
+    total = len(state_names)
+
+    async def _process_state(state_name: str):
+        nonlocal any_cold_start, completed
         state_intent = state_name.replace("_", " ")
 
         clc = await learn_cases_for_state(
@@ -231,9 +235,19 @@ async def learn_cases(state: PipelineState) -> dict:
             domain=domain,
             context_schema=context_schema,
         )
+        completed += 1
+        return clc
 
-        case_learning_contexts.append(clc.model_dump())
-        if clc.is_cold_start:
+    tasks = [_process_state(sn) for sn in state_names]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for res in results:
+        if isinstance(res, Exception):
+            logger.error(f"[KBLearner] Error in async extraction: {res}")
+            continue
+            
+        case_learning_contexts.append(res.model_dump())
+        if res.is_cold_start:
             any_cold_start = True
 
     updates = {

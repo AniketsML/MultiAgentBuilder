@@ -108,6 +108,11 @@ class LLMWrapper:
                 last_error = e
                 logger.warning(f"[LLM] Connection error on attempt {attempt}/{MAX_RETRIES}: {e}")
 
+            except Exception as e:
+                # Catch httpx.ReadError and other underlying network drop exceptions
+                last_error = e
+                logger.warning(f"[LLM] Streaming/Unknown error on attempt {attempt}/{MAX_RETRIES}: {e}")
+
             if attempt < MAX_RETRIES:
                 delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
                 logger.info(f"[LLM] Retrying in {delay:.1f}s...")

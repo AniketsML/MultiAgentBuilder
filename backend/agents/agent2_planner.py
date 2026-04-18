@@ -7,6 +7,7 @@ Variables are extracted here as a natural by-product of case decomposition.
 
 import json
 import logging
+import asyncio
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from backend.utils.json_parser import extract_json, json_ainvoke_with_retry
@@ -17,6 +18,7 @@ from backend.models.schemas import (
     PipelineState, StateDecomposition, CaseSpec, VariableSchema,
 )
 from backend.utils.prompt_loader import load_prompt
+from backend.kb import sqlite_db
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +205,15 @@ async def decompose_states(state: PipelineState) -> dict:
     decompositions = []
     all_variables = []
 
-    for state_name in state_names:
+    completed_count = 0
+    total = len(state_names)
+
+    async def _process(state_name: str):
+        nonlocal completed_count
+        await sqlite_db.update_run_progress(
+            state["run_id"],
+            f"State Decomposition: generating {state_name}..."
+        )
         case_learning = cl_by_state.get(state_name)
 
         user_prompt = _build_user_prompt(
@@ -223,12 +233,28 @@ async def decompose_states(state: PipelineState) -> dict:
         parsed = _coerce_decomposition(parsed)
 
         decomposition = StateDecomposition(**parsed)
-        decompositions.append(decomposition.model_dump())
+        
+        completed_count += 1
+        await sqlite_db.update_run_progress(
+            state["run_id"],
+            f"State Decomposition {completed_count}/{total}: finished {state_name}"
+        )
+        return decomposition
+
+    tasks = [_process(sn) for sn in state_names]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for res in results:
+        if isinstance(res, Exception):
+            logger.error(f"[Agent2] Error in async decomposition: {res}")
+            continue
+
+        decompositions.append(res.model_dump())
 
         # Aggregate variables
-        for v in decomposition.extracted_variables:
-            v_name = v["name"] if isinstance(v, dict) else v.name
-            if v_name not in [av["name"] for av in all_variables]:
+        for v in res.extracted_variables:
+            v_name = v["name"] if isinstance(v, dict) else getattr(v, "name", None)
+            if v_name and v_name not in [av["name"] for av in all_variables]:
                 all_variables.append(v if isinstance(v, dict) else v.model_dump())
 
     # Also build legacy state_specs for backward compatibility
