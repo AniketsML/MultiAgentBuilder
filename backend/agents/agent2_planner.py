@@ -43,6 +43,119 @@ def get_system_prompt() -> str:
     return load_prompt("agent2")
 
 
+GLOBAL_INSTRUCTIONS_NAMES = {"global_instructions", "global_instruction"}
+
+
+def _build_global_instructions_prompt(
+    context_schema_json: str,
+    raw_text: str,
+) -> str:
+    """Special prompt for global_instructions — the PERMANENT behavioral system mandate."""
+    return f"""You are decomposing the GLOBAL INSTRUCTIONS state for a conversational voice bot.
+
+GLOBAL INSTRUCTIONS is NOT a conversational state. It is the PERMANENT behavioral contract
+that governs the bot across EVERY state in the conversation. It defines identity, tone laws,
+absolute prohibitions, universal escalation protocols, and recovery behavior.
+
+Original Context Document:
+---
+{raw_text[:3000]}
+---
+
+Extracted Context Schema:
+{context_schema_json}
+
+Extract ALL of the following with maximum specificity — do NOT be vague:
+
+1. IDENTITY & PERSONA
+   - Bot name, role title, and exact personality traits with domain-specific detail
+   - Communication style: sentence length, use of first names, formality level, rhythm
+   - What the bot NEVER sounds like (anti-example: threats, groveling, over-apologizing)
+   - How the bot refers to itself and the user at all times
+
+2. TONE MANDATE
+   - Primary tone register + exact conditions that trigger variation
+   - Example: "Professional and composed always; shift to empathetic warmth when user expresses
+     financial hardship or distress; NEVER match aggression; NEVER use threatening language"
+   - Explicitly prohibited emotional registers
+
+3. BEHAVIORAL LAWS (absolute rules — apply in every state without exception)
+   - Every guardrail from the context schema as a binding prohibition
+   - Personalization rules: when to use {{{{user_name}}}}, {{{{lender_name}}}}, {{{{due_date}}}}
+   - Language/format constraints: bilingual rules, prohibited phrases, confirmation requirements
+   - What constitutes a legal/compliance violation the bot must avoid
+
+4. UNIVERSAL ESCALATION PROTOCOL
+   - Exact trigger phrases/signals that force escalation from ANY state
+     (e.g., legal threats, abuse, medical emergency, explicit distress signals)
+   - Exact immediate behavior upon trigger: what the bot says BEFORE ending, NOT just "hand off"
+   - global_instructions escalation rules SUPERSEDE all state-level handling
+
+5. UNIVERSAL FALLBACK PROTOCOL (3-strike structure)
+   - Attempt 1: How the bot rephrases and re-engages on first non-parse
+   - Attempt 2: How it simplifies and tries differently on second failure
+   - Attempt 3: Final action before forced exit or escalation
+   - Recovery language register at each level (patient, then firm, then decisive)
+
+6. CALL INTEGRITY RULES
+   - Identity verification: when required, how enforced, what happens on refusal
+   - Silence protocol: dead-air threshold, re-engagement language, escalation trigger
+   - Mid-call exit: if user disconnects or demands to stop, exact closure behavior
+
+STRICT EXTRACTION RULES:
+- Extract ONLY system-wide rules that apply equally in EVERY state
+- DO NOT extract any state-specific handling, routing, or case scenarios
+- DO NOT include @state_name transitions — global_instructions has ZERO transitions
+- Be operationally specific: write what the bot WILL DO, not what it should consider
+
+Return ONLY a JSON object:
+{{
+  "state_name": "global_instructions",
+  "intent": "Permanent behavioral contract: defines who the bot is, how it always behaves, what it must never do, and how it universally recovers — across all states",
+  "cases": [
+    {{
+      "case_name": "identity_and_persona",
+      "category": "happy_path",
+      "description": "Core identity, personality traits, and communication style of the bot",
+      "handling_hint": "Extracted persona: name, voice, formality, first-name usage, anti-examples...",
+      "required_variables": [],
+      "transition_to": "",
+      "tone_guidance": "Defines the universal tone mandate"
+    }},
+    {{
+      "case_name": "behavioral_laws_and_guardrails",
+      "category": "system_condition",
+      "description": "Absolute prohibitions and compliance rules binding in every state",
+      "handling_hint": "Every guardrail extracted from context schema as explicit DO NOT rules",
+      "required_variables": [],
+      "transition_to": "",
+      "tone_guidance": "Firm, non-negotiable"
+    }},
+    {{
+      "case_name": "universal_escalation_protocol",
+      "category": "escalation_trigger",
+      "description": "Triggers and immediate behavior for universal escalation from any state",
+      "handling_hint": "Trigger keywords + exact bot pivot behavior before handoff",
+      "required_variables": [],
+      "transition_to": "",
+      "tone_guidance": "Calm, non-confrontational, de-escalating"
+    }},
+    {{
+      "case_name": "universal_fallback_protocol",
+      "category": "repeat_loop",
+      "description": "3-attempt recovery sequence for any unrecognized input across all states",
+      "handling_hint": "Attempt 1 rephrase → Attempt 2 simplify → Attempt 3 final action",
+      "required_variables": [],
+      "transition_to": "",
+      "tone_guidance": "Patient → patient but firm → decisive"
+    }}
+  ],
+  "extracted_variables": [],
+  "dependencies": [],
+  "tags": ["persona", "guardrails", "global", "permanent", "behavioral_contract"]
+}}"""
+
+
 def _build_user_prompt(
     context_schema_json: str,
     state_name: str,
@@ -51,6 +164,11 @@ def _build_user_prompt(
     case_learning: dict | None = None,
 ) -> str:
     """Build the decomposition prompt for one state."""
+
+    # global_instructions uses a completely separate, tightly scoped prompt
+    if state_name in GLOBAL_INSTRUCTIONS_NAMES:
+        return _build_global_instructions_prompt(context_schema_json, raw_text)
+
     names_str = "\n".join(f"- {name}" for name in state_names)
 
     # Format KB case knowledge if available
@@ -58,20 +176,26 @@ def _build_user_prompt(
     if case_learning and case_learning.get("learned_cases"):
         kb_cases = []
         for lc in case_learning["learned_cases"]:
+            sub_cond_text = ""
+            sub_conds = lc.get('sub_conditions', [])
+            if sub_conds:
+                sub_cond_text = f" | sub-conditions: {', '.join(sub_conds[:5])}"
             kb_cases.append(
-                f"  - {lc['case_category']}: {lc['handling_strategy'][:200]}"
+                f"  - [{lc['case_category']}]: {lc['handling_strategy'][:600]}"
+                f"{sub_cond_text}"
                 f" (vars: {', '.join(lc.get('variables_used', []))})"
             )
         kb_section = f"""
-KB CASE KNOWLEDGE (from similar prompts in the knowledge base):
-The following case categories have been seen for similar states:
+KB CASE KNOWLEDGE (from similar prompts — learn the DEPTH and BRANCHING STRUCTURE):
+These are concrete handling patterns from real production prompts. Use the sub-conditions
+and branching logic to generate cases with equivalent depth for this state.
 {chr(10).join(kb_cases)}
 
 Anti-patterns to avoid:
 {chr(10).join(f'  - {ap}' for ap in case_learning.get('anti_patterns', []))}
 
-Use this knowledge to inform which cases are most relevant for this domain.
-Do NOT copy the strategies verbatim -- learn the reasoning approach.
+IMPORTANT: Notice how each category above has nested sub-cases. Your case decomposition
+must have the same level of branching specificity — not flat descriptions.
 """
 
     taxonomy_str = "\n".join(f"  - {t}" for t in CASE_TAXONOMY)
@@ -90,38 +214,49 @@ All state names in this flow:
 STATE TO DECOMPOSE: {state_name}
 {kb_section}
 
-CANONICAL CASE TAXONOMY (consider ALL of these):
+CANONICAL CASE TAXONOMY (consider ALL of these for EVERY state):
 {taxonomy_str}
 
-Decompose this state into an exhaustive case map.
-For EACH case, provide:
+Decompose this state into an exhaustive case map covering the happy path AND all realistic
+edge cases. For EACH case, provide:
 - case_name: descriptive snake_case name
-- category: one of the canonical categories above
-- description: what triggers this case (be specific)
-- handling_hint: suggested handling approach
-- required_variables: data variables needed for this case
-- transition_to: which state comes next (from the state list)
-- tone_guidance: appropriate tone for this case type
+- category: one of the 12 canonical categories above
+- description: PRECISELY what user input, signal, or system condition triggers this case.
+  NOT generic. Example: "User states they cannot pay because they lost their job" not "user refuses".
+- handling_hint: The exact behavioral approach — what the bot should do step by step,
+  including sub-conditions. Format as decision-tree steps, not a vague description.
+  Include: (1) first bot action, (2) if/else branches, (3) what happens at each branch.
+- required_variables: ONLY real backend-passed data fields the bot needs for this case.
+  Think: user_name, lender_name, due_date, emi_amount, account_number, loan_id, etc.
+  Do NOT invent abstract variables. If the case doesn’t need backend data, use [].
+- transition_to: exact state name from the list above. For conditional transitions,
+  describe ALL branches: "if X → @state_a; if Y → @state_b"
+- tone_guidance: specific tone for this case type (not generic 'professional'—be exact)
 
-VARIABLE FORMAT CONVENTION (MANDATORY):
-- All variable names MUST be written in double curly braces: {{{{variable_name}}}}
-- Examples: {{{{first_name}}}}, {{{{payment_amount}}}}, {{{{account_number}}}}
-- Use snake_case inside the braces
-- In the extracted_variables list, store the name WITHOUT braces (e.g. "first_name")
-  but in handling_hint text, ALWAYS wrap them as {{{{first_name}}}}
+VARIABLE RULES (MANDATORY):
+- ALL variable references in handling_hint text MUST use: {{{{variable_name}}}}
+- Examples: {{{{user_name}}}}, {{{{due_date}}}}, {{{{emi_amount}}}}, {{{{lender_name}}}}
+- In extracted_variables list: store name WITHOUT braces ("user_name", "due_date")
+- ONLY extract variables that the bot genuinely needs at runtime from the backend
+- NEVER invent variables not grounded in the domain context
 
-TRANSITION LOGIC:
-- transition_to must reference an EXACT state name from the state list above
-- If the transition is conditional (different outcomes go to different states),
-  describe the routing in the handling_hint, e.g.:
-  "If {{{{user_response}}}} is affirmative → collect_payment, if refusal → handle_objection"
+TRANSITION FORMAT RULES (MANDATORY):
+- All transitions use @state_name format inline within handling_hint
+- Example: "If user confirms → @payment_collection; if user refuses → @objection_handling"
+- transition_to field: use plain state_name (no @), or describe conditional routing as:
+  "confirmed: payment_collection | refused: objection_handling"
 
-Also extract ALL variables that emerge from the cases.
+EDGE CASE REQUIREMENT:
+- For EVERY happy_path case, also define at minimum:
+  (a) what happens if required data is missing or invalid
+  (b) what happens if user acknowledges but does not act
+  (c) what happens if user gives an ambiguous or partial response
+- Each of these becomes a separate case entry with the correct category.
 
 Respond with ONLY a JSON object:
 {{
   "state_name": "{state_name}",
-  "intent": "one sentence describing this state's goal",
+  "intent": "one precise sentence describing the single goal of this state",
   "cases": [...],
   "extracted_variables": [{{"name": "...", "description": "...", "type": "..."}}],
   "dependencies": ["state names that must occur before this"],

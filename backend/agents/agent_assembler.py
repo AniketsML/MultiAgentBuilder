@@ -51,6 +51,7 @@ def _build_user_prompt(
     char_limit: int,
     variables_json: str,
     dna_principles: list[str] | None = None,
+    format_examples: list[str] | None = None,
 ) -> str:
     # Sort handlers by canonical order
     def sort_key(h):
@@ -68,83 +69,132 @@ def _build_user_prompt(
 --- CASE: {h['case_name']} ({h['category']}) ---
 Condition: {h['condition']}
 Tone: {h.get('tone', 'default')}
-Transition: {h.get('transition_to', 'none')}
-Variables: {', '.join(h.get('variables_used', []))}
 Handler:
 {h['bot_response']}
 """
-
-    case_names = [h["case_name"] for h in sorted_handlers]
 
     # Add DNA coherence instructions if available
     dna_section = ""
     if dna_principles:
         dna_lines = "\n".join(f"  - {p}" for p in dna_principles[:20])
         dna_section = f"""
-
-9. PARADIGM DNA COHERENCE: The assembled prompt must comply with these learned principles:
+PARADIGM DNA COHERENCE: The assembled prompt must comply with these learned principles:
 {dna_lines}
 
    These are non-negotiable architectural principles. The assembled prompt must
    demonstrably embody them in structure, language, and flow.
 """
 
-    return f"""Context Schema:
+    # ── Format reference: inject KB/sample prompt examples for structural matching ─
+    format_ref_section = ""
+    if format_examples:
+        refs = []
+        for i, ex in enumerate(format_examples[:2], 1):
+            refs.append(f"--- FORMAT REFERENCE {i} ---\n{str(ex)[:3000]}")
+        format_ref_section = f"""
+================================================================================
+FORMAT REFERENCE — PRODUCTION PROMPTS (YOUR OUTPUT MUST MATCH THIS STRUCTURE)
+================================================================================
+These are real production prompts. They might be for different use cases or 
+intents, but your assembled prompt MUST replicate their structural format exactly. 
+This is the structural DNA you must clone. Key patterns to enforce:
+
+  1. GOAL: line first — one sentence, variables inline, all-caps GOAL label
+  2. Capitalized section headers per scenario: "Agreement to Pay", "REFUSAL HANDLING",
+     "SPECIAL Scenario Response / Action", "Disclosure:", "Reasoning:"
+  3. Numbered sequential probes: "First Probe (Strict):", "Second Probe (Moderate):",
+     "Third Probe (Final):" with explicit acceptance criteria per probe
+  4. Explicit max attempts: "(Max 3 Probes)", "retry up to 3 times"
+  5. Rotation rules inline: "Rotate categories... Never repeat."
+  6. Validation math: "Accept date within {{{{due_date}}}} + 2 days", "must fall within current month"
+  7. Arrow branches: "If Yes → @state_name; If No → @other_state"
+  8. Direct imperative language: "Inform {{{{user_name}}}} that...", "Ask {{{{user_name}}}} to provide..."
+  9. SPECIAL Scenario as a named section aggregating all special cases
+
+  ABSOLUTELY FORBIDDEN in output:
+  - Soft paragraph prose: "greet warmly", "reassure gently", "acknowledge respectfully"
+  - Generic empathy filler before operational instructions
+  - Narrative case descriptions instead of direct instructions
+  - 'Case 1:', 'Handler:', 'Block A:' labels
+
+{''.join(refs)}
+================================================================================
+"""
+
+    # ── Global instructions: inject dedicated header ───────────────────────────
+    is_gi = state_name in ("global_instructions", "global_instruction")
+    gi_header = f"""ASSEMBLING: global_instructions — PERMANENT BEHAVIORAL CONTRACT
+This is NOT a conversational state. It governs EVERY other state system-wide.
+This is the most important prompt in the output — write it as a BINDING OPERATIONAL MANDATE.
+
+MANDATORY RULES for global_instructions:
+- ZERO @state_name transitions — add none
+- NO routing, no state-specific scenarios, no conditional case handling
+- MUST cover ALL of:
+    1. Identity + persona (name, traits, voice, anti-examples of wrong tone)
+    2. Tone mandate (primary register + exact conditions for shifts + prohibited registers)
+    3. Behavioral laws (every guardrail as NEVER... absolute prohibitions)
+    4. Universal escalation protocol (exact trigger phrases + scripted immediate pivot)
+    5. Universal fallback protocol (Attempt 1 / Attempt 2 / Attempt 3 with tone at each)
+    6. Call integrity rules (identity verification, silence, mid-call exit)
+- Write what the bot WILL DO — not what it "should" consider
+- Character limit: {char_limit} — compress ruthlessly, lose no rule
+- Start with: Goal: [one precise sentence — the system-wide behavioral mandate]
+
+""" if is_gi else ""
+
+    return f"""{gi_header}{format_ref_section}Context Schema:
 {context_schema_json}
 
 STATE: {state_name}
 INTENT: {intent}
-CHARACTER LIMIT: {char_limit} characters (STRICT -- do NOT exceed)
+CHARACTER LIMIT: {char_limit} characters (STRICT — do NOT exceed)
 
-LOCKED VARIABLES:
+LOCKED VARIABLES (real backend-passed fields — use ONLY these, never invent new ones):
 {variables_json}
 
-CASE HANDLERS TO ASSEMBLE (in recommended order):
+CASE HANDLERS TO ASSEMBLE:
 {handlers_text}
 
 ASSEMBLY INSTRUCTIONS:
-1. ORDERING: Happy path first, then common variations, then edge cases, then escalation last.
-2. COHERENCE: The final prompt must read as ONE unified document, not a list of pasted blocks.
-   Smooth transitions between sections. Use natural flow language.
-3. COMPLETENESS: Every case handler above MUST appear in the final prompt. Do NOT silently
-   drop cases to hit the char limit -- if you're over, tighten language, don't remove cases.
-4. STRUCTURE: Use clear conditional structure so the bot knows WHEN each case applies.
-   "If the user...", "When...", "In cases where..." etc.
-5. PERSONA: The entire prompt must consistently reflect the persona from context_schema.
-6. VARIABLE FORMAT (MANDATORY): ALL variable references MUST use double curly braces.
-   Write {{{{first_name}}}} not [first_name] or bare first_name.
-   Scan every handler and convert ANY non-compliant variable references to {{{{var_name}}}} format.
-   Use ONLY the locked variables -- never invent new ones.
-7. CHARACTER LIMIT: Count characters. If over, compress phrasing. NEVER sacrifice case
-   coverage to hit the limit.
-8. TRANSITION ROUTING (MANDATORY): You MUST include transition logic using this approach:
-   - INLINE ROUTING: Within each case handler, state the transition at the end of the handler.
-     Use the format: "→ Transition to [state_name]" or for conditional transitions:
-     "If {{{{var}}}} is X → state_a, elif Y → state_b, else → state_c"
-   - ROUTING SUMMARY SECTION: At the very END of the assembled prompt, add a clearly labeled
-     section titled "## ROUTING" that consolidates ALL transition paths from this state:
-     ```
-     ## ROUTING
-     - Happy path (user confirms) → next_state_name
-     - User refuses → handle_objection
-     - Escalation triggered → transfer_to_agent
-     - Invalid input (retry < 3) → [loop: current_state]
-     - Max retries exceeded → fallback_state
-     ```
-   - Both inline AND the routing summary are required. Inline provides situational context,
-     the routing summary provides a quick-reference table for the system.
+1. FORMAT PRIMACY (HIGHEST PRIORITY): The assembled prompt MUST match the structural format
+   of the FORMAT REFERENCE above. Use the same section-header style, probe numbering,
+   rotation rules, and validation math shown in those examples.
+   If no format reference is provided, use the dense operational style: numbered sections,
+   capitalized headers, explicit probe counts, arrow branching — NOT soft prose.
+2. GOAL LINE (MANDATORY FIRST LINE): GOAL: [one precise sentence — what this state achieves]
+3. STRUCTURAL FORMAT: Use capitalized section names per scenario:
+   'Agreement to Pay:', 'REFUSAL HANDLING (Max N Probes):', 'SPECIAL Scenario Response / Action:'
+   Numbered sub-probes: 'First Probe (Strict):', 'Second Probe (Moderate):', 'Third Probe (Final):'
+   Arrow branches: 'If Yes → @state_name; If No → @other_state'
+4. LANGUAGE: Direct imperative ONLY. 'Inform {{{{user_name}}}} that...', 'Ask {{{{user_name}}}} to...'
+   NEVER: 'greet warmly', 'reassure', 'acknowledge respectfully', soft empathy filler.
+5. PRESERVE DECISION-TREE DEPTH: All nested sub-conditions, numbered probes, validation rules,
+   rotation rules, explicit attempt counts MUST survive assembly. Do NOT flatten.
+6. PERSONA: One consistent voice throughout. No drift between sections.
+7. VARIABLE FORMAT (ABSOLUTE): {{{{variable_name}}}} — double braces, snake_case only.
+   ONLY locked variables. Correct: {{{{user_name}}}}, {{{{lender_name}}}}, {{{{due_date}}}}, {{{{emi_amount}}}}
+8. CHARACTER LIMIT: Compress phrasing if over. NEVER drop cases or @transitions.
+9. INLINE TRANSITIONS — ABSOLUTE RULE:
+   - Always: → @state_name inline at end of the branch it belongs to
+   - Conditional: 'If confirmed → @payment_collection; if declined → @call_closed'
+   - NEVER 'transition to state_name' — @state_name format ONLY
+   - NEVER a Routing/Transitions/Navigation section — ABSOLUTELY FORBIDDEN
+   - global_instructions: ZERO @state_name transitions
+10. COMPLETENESS: Every handler MUST appear. Drop nothing.
 {dna_section}
-Write the complete assembled prompt now. Output ONLY the raw prompt text, no JSON wrapper,
-no markdown, no preamble, no explanation."""
+Write the complete assembled prompt now. Output ONLY the raw prompt text — no JSON, no markdown, no preamble."""
+
 
 
 async def assemble_prompts(state: PipelineState) -> dict:
     """LangGraph node: assemble case handlers into final prompts for all states."""
-    llm = get_llm(max_tokens=3000)
+    llm = get_llm(max_tokens=4096)
 
     context_schema = state.get("context_schema", {})
     case_handlers = state.get("case_handlers", [])
     prioritised_cases = state.get("prioritised_cases", [])
+    case_learning_contexts = state.get("case_learning_contexts", [])
     extracted_vars = state.get("extracted_variables", [])
     context_json = json.dumps(context_schema, indent=2)
     variables_json = json.dumps(extracted_vars, indent=2)
@@ -165,6 +215,15 @@ async def assemble_prompts(state: PipelineState) -> dict:
         if not dna_principles:
             dna_principles = None
 
+    # Extract format_examples from context_schema.raw_examples
+    # These are the user's uploaded sample prompts — the ground truth for output format
+    format_examples = None
+    raw_ex = context_schema.get("raw_examples")
+    if isinstance(raw_ex, list) and raw_ex:
+        format_examples = [str(e) for e in raw_ex if e]
+    elif isinstance(raw_ex, str) and raw_ex.strip():
+        format_examples = [raw_ex]
+
     if not case_handlers:
         return {
             "drafts": [],
@@ -175,6 +234,11 @@ async def assemble_prompts(state: PipelineState) -> dict:
     pcl_by_state = {}
     for pcl in prioritised_cases:
         pcl_by_state[pcl.get("state_name", "")] = pcl
+
+    # Index case learning by state for fetching usecase-specific DB prompt examples
+    cl_by_state = {}
+    for cl in case_learning_contexts:
+        cl_by_state[cl.get("state_name", "")] = cl
 
     drafts = []
     retrieval_contexts = []
@@ -194,12 +258,16 @@ async def assemble_prompts(state: PipelineState) -> dict:
         intent = pcl.get("intent", "")
         char_limit = pcl.get("total_char_budget", 4500)
 
-        if state_name in ("global_instructions", "global_instruction"):
-            char_limit = 2000
+        # Prioritize use-case specific prompt from DB over global fallback
+        cl = cl_by_state.get(state_name, {})
+        state_format_examples = format_examples
+        if cl and cl.get("raw_prompts"):
+            state_format_examples = cl["raw_prompts"]
 
         user_prompt = _build_user_prompt(
             context_json, state_name, intent, handlers, char_limit, variables_json,
             dna_principles=dna_principles,
+            format_examples=state_format_examples,
         )
 
         messages = [
@@ -219,13 +287,14 @@ async def assemble_prompts(state: PipelineState) -> dict:
             case_breakdown=case_names,
             retrieved_examples=[],
         )
-        
+
         completed_count += 1
         await sqlite_db.update_run_progress(
             state["run_id"],
             f"Prompt Assembly {completed_count}/{total}: finished {state_name}"
         )
         return draft
+
 
     tasks = [_process(ch) for ch in case_handlers]
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -297,10 +366,26 @@ async def reassemble_prompt(state: PipelineState) -> dict:
         if not dna_principles:
             dna_principles = None
 
+    # Extract format_examples from context_schema.raw_examples
+    format_examples = None
+    raw_ex = context_schema.get("raw_examples")
+    if isinstance(raw_ex, list) and raw_ex:
+        format_examples = [str(e) for e in raw_ex if e]
+    elif isinstance(raw_ex, str) and raw_ex.strip():
+        format_examples = [raw_ex]
+
+    # Prioritize use-case specific prompt from DB over global fallback
+    case_learning_contexts = state.get("case_learning_contexts", [])
+    for cl in case_learning_contexts:
+        if cl.get("state_name") == regen_state_name and cl.get("raw_prompts"):
+            format_examples = cl["raw_prompts"]
+            break
+
     user_prompt = _build_user_prompt(
         context_json, regen_state_name, intent,
         target_handlers.get("handlers", []), char_limit, variables_json,
         dna_principles=dna_principles,
+        format_examples=format_examples,
     )
 
     if regen_reason:

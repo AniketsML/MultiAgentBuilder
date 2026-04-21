@@ -50,31 +50,43 @@ The state intent is: "{state_intent}"
 
 KB PROMPT:
 ---
-{kb_prompt[:3000]}
+{kb_prompt[:5000]}
 ---
 
-Extract structured case knowledge. For each case this prompt handles, identify:
+Extract DEEP structured case knowledge. This extraction will be used to teach another agent
+how to write production prompts with the same depth and branching structure.
+
+For EACH case this prompt handles, extract:
 1. case_category: one of [{', '.join(CASE_TAXONOMY)}]
-2. handling_strategy: HOW does the prompt handle this case? (the approach, not the words)
-3. variables_used: what data variables are referenced in this case handler?
-4. transition_target: where does the conversation go after this case?
-5. tone_approach: what tone/register is used for this case type?
+2. handling_strategy: Preserve the EXACT branching structure. Include ALL sub-conditions,
+   sequential steps, validation logic, and conditional exits. Do NOT abstract or summarize.
+   Write it as: "If [exact condition]: [exact step 1] → [step 2]. If [sub-condition A]: [action A].
+   If [sub-condition B]: [action B], transition to [state]."
+   This must be specific enough that another agent can reproduce the same decision tree.
+3. sub_conditions: list every named sub-case, branch, or validation step within this case
+   (e.g. ["Case A - caller already identified", "Case B - wrong number denial",
+   "First Probe - strict date", "Second Probe - moderate date"])
+4. variables_used: every data variable referenced, including disposition variables
+5. transition_target: ALL exit points from this case (may be multiple)
+6. tone_approach: exact tone register, including any tone shifts between sub-conditions
 
 Also identify:
-- anti_patterns: things this prompt deliberately avoids doing
+- anti_patterns: specific things this prompt deliberately avoids (e.g. "never say have a nice day",
+  "never reveal loan details to third parties", "never accept past dates as PTP")
 
 Return ONLY a JSON object:
 {{
   "cases": [
     {{
       "case_category": "...",
-      "handling_strategy": "...",
+      "handling_strategy": "Full branching description preserved verbatim...",
+      "sub_conditions": ["sub-case 1", "sub-case 2"],
       "variables_used": ["..."],
       "transition_target": "...",
       "tone_approach": "..."
     }}
   ],
-  "anti_patterns": ["..."]
+  "anti_patterns": ["specific thing to never do", "..."]
 }}"""
 
 
@@ -82,7 +94,7 @@ async def _extract_cases_from_prompt(
     kb_prompt: str, domain: str, state_intent: str
 ) -> tuple[list[dict], list[str]]:
     """Second-pass extraction: analyse one KB prompt for case knowledge."""
-    llm = get_llm(max_tokens=1500)
+    llm = get_llm(max_tokens=3000)
 
     user_prompt = _build_extraction_prompt(kb_prompt, domain, state_intent)
 
@@ -118,8 +130,22 @@ async def learn_cases_for_state(
     1. Semantic search for relevant KB prompts
     2. Dedicated extraction call per retrieved prompt
     """
+    # global_instructions must NOT retrieve KB prompts — they are always state-specific
+    # handlers (wrong_number, callback, etc.) that would contaminate the global state.
+    if state_name in ("global_instructions", "global_instruction"):
+        return CaseLearningContext(
+            state_name=state_name,
+            source_count=0,
+            learned_cases=[],
+            common_variables=[],
+            anti_patterns=[],
+            retrieval_note="global_instructions — KB retrieval skipped by design",
+            is_cold_start=False,
+        )
+
     persona = context_schema.get("persona", "")
     guardrails = context_schema.get("guardrails", [])
+
 
     # Step 1: Retrieve relevant KB prompts with metadata
     candidates, is_cold_start = await retrieve_for_case_learning(
@@ -189,13 +215,16 @@ async def learn_cases_for_state(
     common_variables = list(set(v for v in all_variables if all_variables.count(v) > 1))
     unique_anti_patterns = list(set(all_anti_patterns))
 
+    # Collect raw prompt texts for direct case writer reference
+    raw_prompts = [c["prompt"] for c in candidates if c.get("prompt")]
+
     retrieval_note = (
         f"Analysed {len(candidates)} KB prompts. "
         f"Found cases in categories: {', '.join(sorted(category_counts.keys()))}. "
         f"Most common: {max(category_counts, key=category_counts.get) if category_counts else 'none'}."
     )
 
-    return CaseLearningContext(
+    clc = CaseLearningContext(
         state_name=state_name,
         source_count=len(candidates),
         learned_cases=all_cases,
@@ -204,6 +233,11 @@ async def learn_cases_for_state(
         retrieval_note=retrieval_note,
         is_cold_start=is_cold_start,
     )
+    # Attach raw prompts as extra data (model_dump will carry it if schema allows)
+    result = clc.model_dump()
+    result["raw_prompts"] = raw_prompts[:3]  # Top 3 raw prompts for reference
+    return result
+
 
 
 async def learn_cases(state: PipelineState) -> dict:
@@ -245,10 +279,18 @@ async def learn_cases(state: PipelineState) -> dict:
         if isinstance(res, Exception):
             logger.error(f"[KBLearner] Error in async extraction: {res}")
             continue
-            
-        case_learning_contexts.append(res.model_dump())
-        if res.is_cold_start:
-            any_cold_start = True
+
+        # learn_cases_for_state now returns a dict (with raw_prompts attached)
+        if isinstance(res, dict):
+            case_learning_contexts.append(res)
+            if res.get("is_cold_start"):
+                any_cold_start = True
+        else:
+            # Fallback: model object (cold start path still returns CaseLearningContext)
+            case_learning_contexts.append(res.model_dump())
+            if res.is_cold_start:
+                any_cold_start = True
+
 
     updates = {
         "case_learning_contexts": case_learning_contexts,

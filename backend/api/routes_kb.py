@@ -111,13 +111,25 @@ Analyze the provided conversational bot prompt and extract the metadata.
 
 CRITICAL RULES:
 1. DOMAIN: Classify into a broad industry/use-case (e.g., "pizza_delivery", "healthcare_booking", "debt_collection"). Keep it standard and professional. 
-2. STATE NAME: Use standard snake_case to describe the PRIMARY PURPOSE of the prompt (what 70%+ of the prompt focuses on). If the primary focus is a conversational step (e.g., collecting payment, booking), name that step (e.g., "collect_payment") EVEN IF it briefly mentions persona traits. ONLY use "global_instructions" if the prompt is entirely about overarching rules and system-wide behaviors.
-3. TAGS: Output 1-3 descriptive tags categorizing the type of prompt (e.g., "persona", "guardrails", "routing", "transactional", "fallback"). DO NOT use the domain name as a tag.
+2. STATE NAMING (Standard Buckets vs Granular): Derive a `snake_case` state name describing the prompt's primary intent.
+   - PREFER STANDARD BUCKETS: Try to map the prompt to an industry-standard conversational bucket if it fits the core intent, even if the prompt describes a specific variation. 
+     - "wrong_number": Use this whenever the correct person is not on the phone (e.g., family member answered, third-party picked up, wrong person).
+     - "user_busy": Use this whenever the user cannot talk (e.g., driving, at work, call back later).
+     - "payment_collection": Use this for any prompt fundamentally about securing payment, capturing a payment method, or scheduling a payment date.
+     - "identity_verification": Use this when the core task is confirming who is speaking (e.g., validating DOB).
+     - "answering_machine": Use this for detecting or handling voicemails.
+     - "global_instructions": Use ONLY if the prompt evaluates system-wide rules or persona and is NOT a specific conversational step.
+   - DYNAMIC FALLBACK: If the prompt's action is totally unique and does NOT fit any standard bucket, synthesize a 2-4 word specific identifier (e.g., `medical_triage`, `address_update`).
+3. TAGS: Output 1-3 descriptive tags categorizing the type of prompt (e.g., "persona", "guardrails", "routing", "transactional", "fallback", "objection_handling", "scheduling"). DO NOT use the domain name as a tag.
 4. INTENT: A short sentence describing what the prompt actually achieves.
 
-EXAMPLE (Global instructions for collections):
-Prompt: "You are a debt collector. Be firm but polite. Never yell."
+EXAMPLE 1 (Global instructions):
+Prompt: "You are a debt collector. Be firm but polite. Never yell. Always use the user's name."
 JSON: {"domain": "debt_collection", "state_name": "global_instructions", "intent": "Sets the persona and guardrails for the agent", "tags": ["persona", "guardrails"]}
+
+EXAMPLE 2 (Family Member answers -> Maps to Wrong Number):
+Prompt: "If someone else answers, ask if they are a family member. Do not disclose the debt. Ask them to pass the message."
+JSON: {"domain": "debt_collection", "state_name": "wrong_number", "intent": "Handles a third-party or family member answering the phone", "tags": ["routing", "wrong_party"]}
 
 Output ONLY strict JSON in the following format:
 {
